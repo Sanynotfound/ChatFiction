@@ -254,6 +254,8 @@
             const [currentBlock, setCurrentBlock] = useState([]);
             const [lineIndex, setLineIndex] = useState(0);
             const [waitingForChoice, setWaitingForChoice] = useState(null);
+            // 新增：记录上一个选择点的状态
+            const [lastChoicePoint, setLastChoicePoint] = useState(null);
             
             // UI State
             const [isTyping, setIsTyping] = useState(false);
@@ -401,7 +403,13 @@
             const handleChoice = (option) => {
                 if (!storyData) return;
 
-                // 1. "我" 说出选项
+                // 1. 保存当前状态作为“上一个选择点”
+                setLastChoicePoint({
+                    messageHistory: [...messageHistory],
+                    choices: waitingForChoice
+                });
+
+                // 2. "我" 说出选项
                 setMessageHistory(prev => [
                     ...prev,
                     {
@@ -415,7 +423,7 @@
 
                 setWaitingForChoice(null);
 
-                // 2. 跳转分支
+                // 3. 跳转分支
                 const branchBlock = storyData.branches[option.id];
                 if (branchBlock) {
                     setCurrentBlock(branchBlock.lines);
@@ -423,6 +431,18 @@
                     setTimeout(() => triggerAutoAdvance(), 500);
                 } else {
                     console.error(`Branch ${option.id} not found!`);
+                }
+            };
+
+            // 新增：处理回到上一个选择点
+            const handleBackToChoice = () => {
+                if (lastChoicePoint) {
+                    setMessageHistory(lastChoicePoint.messageHistory);
+                    setWaitingForChoice(lastChoicePoint.choices);
+                    setEndingInfo(null);
+                    setCurrentBlock([]); // 清空当前块，停止自动播放逻辑
+                    setLineIndex(0);
+                    clearAutoPlay();
                 }
             };
 
@@ -441,6 +461,7 @@
                         setMessageHistory([]); 
                         setWaitingForChoice(null);
                         setEndingInfo(null);
+                        setLastChoicePoint(null); // 重置历史点
                         
                         setTimeout(() => triggerAutoAdvance(), 500);
                     } else {
@@ -457,6 +478,7 @@
                     setMessageHistory([]);
                     setWaitingForChoice(null);
                     setEndingInfo(null);
+                    setLastChoicePoint(null);
                     clearAutoPlay();
                     setShowMenu(false);
                     setTimeout(() => triggerAutoAdvance(), 500);
@@ -474,6 +496,7 @@
                 }]);
                 setWaitingForChoice(null);
                 setEndingInfo(null);
+                setLastChoicePoint(null);
                 clearAutoPlay();
                 setShowMenu(false);
             };
@@ -602,27 +625,44 @@
                             onChange={handleFileUpload}
                         />
 
-                        {/* 结局弹窗 */}
+                        {/* 结局弹窗 - Apple News 风格优化版 */}
                         {endingInfo && (
-                            <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in">
-                                <div className="bg-white w-full rounded-xl shadow-2xl overflow-hidden zoom-in-95">
-                                    <div className="bg-[#EDEDED] px-6 py-4 border-b border-gray-200">
-                                        <h2 className="text-xl font-bold text-center text-gray-800">{endingInfo.title}</h2>
+                            <div className="absolute inset-0 z-50 bg-gray-900/40 backdrop-blur-md flex items-center justify-center p-6 animate-in">
+                                <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden zoom-in-95 border border-gray-100">
+                                    <div className="px-8 pt-10 pb-6 text-center">
+                                        <p className="text-xs font-bold tracking-widest text-[#FF2D55] uppercase mb-3">
+                                            The End
+                                        </p>
+                                        <h2 className="text-3xl font-serif font-bold text-gray-900 leading-tight mb-4">
+                                            {endingInfo.title}
+                                        </h2>
+                                        <div className="w-12 h-1 bg-gray-100 mx-auto mb-6"></div>
+                                        <p className="text-gray-500 font-sans text-lg leading-relaxed">
+                                            {endingInfo.eval}
+                                        </p>
                                     </div>
-                                    <div className="p-8 text-center">
-                                        <div className="text-6xl mb-4">🏁</div>
-                                        <p className="text-gray-600 text-lg leading-relaxed">{endingInfo.eval}</p>
-                                    </div>
-                                    <div className="bg-[#F7F7F7] p-4 flex flex-col gap-3">
+
+                                    <div className="p-6 pt-0 flex flex-col gap-3">
                                         <button 
                                             onClick={restartGame}
-                                            className="w-full bg-[#07C160] hover:bg-[#06ad56] text-white font-medium py-3 rounded-lg transition-colors"
+                                            className="w-full bg-black hover:bg-gray-800 text-white font-semibold py-3.5 rounded-xl transition-all shadow-lg shadow-gray-200"
                                         >
                                             重新游玩
                                         </button>
+                                        
+                                        {/* 新增：回到上一个选择点 */}
+                                        {lastChoicePoint && (
+                                            <button 
+                                                onClick={handleBackToChoice}
+                                                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-900 font-semibold py-3.5 rounded-xl transition-colors"
+                                            >
+                                                回到上一个选择点
+                                            </button>
+                                        )}
+
                                         <button 
                                             onClick={() => { resetAll(); fileInputRef.current?.click(); }}
-                                            className="w-full bg-white hover:bg-gray-50 text-gray-800 font-medium py-3 rounded-lg border border-gray-300 transition-colors"
+                                            className="w-full bg-gray-100 hover:bg-gray-200 text-gray-900 font-semibold py-3.5 rounded-xl transition-colors"
                                         >
                                             上传新纪录
                                         </button>
