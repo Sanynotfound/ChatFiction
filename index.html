@@ -1,0 +1,635 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { MoreHorizontal, PlusCircle, RotateCcw, Upload, FileText } from 'lucide-react';
+
+/**
+ * TYPE DEFINITIONS
+ */
+type LineType = 'dialogue' | 'state' | 'choice' | 'goto' | 'ending' | 'branch_end';
+
+interface Line {
+  type: LineType;
+  speaker?: string;
+  content?: string;
+  options?: ChoiceOption[];
+  targetScene?: string;
+  endingTitle?: string;
+  endingEval?: string;
+}
+
+interface ChoiceOption {
+  id: string; // The branch ID (e.g., C1_A)
+  text: string;
+}
+
+interface StoryBlock {
+  lines: Line[];
+}
+
+interface StoryData {
+  scenes: Record<string, StoryBlock>;  // Map Scene ID -> Block
+  branches: Record<string, StoryBlock>; // Map Branch Source ID -> Block
+  startSceneId: string | null;
+}
+
+interface Message {
+  id: number;
+  speaker: string;
+  content: string;
+  isMe: boolean;
+  type: 'text' | 'state';
+}
+
+/**
+ * PARSER UTILS
+ * Parses the custom XML-like format provided in the prompt.
+ */
+const parseScript = (text: string): StoryData => {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+  const data: StoryData = { scenes: {}, branches: {}, startSceneId: null };
+  
+  let currentBlockId: string | null = null;
+  let currentBlockType: 'scene' | 'branch' | null = null;
+  let currentLines: Line[] = [];
+  let lastSpeaker = '旁白'; // Default speaker
+
+  const saveCurrentBlock = () => {
+    if (currentBlockId && currentLines.length > 0) {
+      const block = { lines: [...currentLines] };
+      if (currentBlockType === 'scene') {
+        data.scenes[currentBlockId] = block;
+        if (!data.startSceneId) data.startSceneId = currentBlockId;
+      } else {
+        data.branches[currentBlockId] = block;
+      }
+    }
+    currentLines = [];
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 1. Detect Scene Start
+    const sceneMatch = line.match(/<SCENE id="([^"]+)">/);
+    if (sceneMatch) {
+      saveCurrentBlock();
+      currentBlockId = sceneMatch[1];
+      currentBlockType = 'scene';
+      lastSpeaker = '旁白'; // Reset context on new scene
+      i++;
+      continue;
+    }
+
+    // 2. Detect Branch Start
+    const branchMatch = line.match(/<BRANCH from="([^"]+)">/);
+    if (branchMatch) {
+      saveCurrentBlock();
+      currentBlockId = branchMatch[1];
+      currentBlockType = 'branch';
+      // Do not reset lastSpeaker here strictly, but usually branches imply continuity
+      i++;
+      continue;
+    }
+
+    // 3. Detect Choice Block
+    if (line.startsWith('<CHOICE')) {
+      const options: ChoiceOption[] = [];
+      i++; // Move inside choice
+      while (i < lines.length && !lines[i].startsWith('</CHOICE>')) {
+        const optLine = lines[i];
+        // Parse: A id="C1_A">Option Content</A>
+        // Regex looks for id="..." and content between > and </
+        const optMatch = optLine.match(/id="([^"]+)">([^<]+)<\//);
+        if (optMatch) {
+          options.push({ id: optMatch[1], text: optMatch[2] });
+        }
+        i++;
+      }
+      currentLines.push({ type: 'choice', options });
+      i++; // Skip </CHOICE>
+      continue;
+    }
+
+    // 4. Detect GOTO
+    const gotoMatch = line.match(/<GOTO scene="([^"]+)"\s*\/>/);
+    if (gotoMatch) {
+      currentLines.push({ type: 'goto', targetScene: gotoMatch[1] });
+      i++;
+      continue;
+    }
+
+    // 5. Detect ENDING (Simple tag closing branch/scene, but content usually precedes it)
+    if (line.includes('【结局')) {
+        // Format: 【结局n】[结局名称] —— 评价
+        // Regex to parse
+        const endMatch = line.match(/【(.*?)】\[(.*?)\]\s*[—-]+\s*(.*)/);
+        if (endMatch) {
+             currentLines.push({
+                type: 'ending',
+                endingTitle: `【${endMatch[1]}】${endMatch[2]}`,
+                endingEval: endMatch[3]
+             });
+        } else {
+             // Fallback loose parse
+             currentLines.push({
+                 type: 'ending',
+                 endingTitle: line,
+                 endingEval: ''
+             });
+        }
+        // Usually followed by </ENDING>, handled by skip or next block
+        i++;
+        continue;
+    }
+    
+    // 6. Detect Closing Tags (End of blocks)
+    if (line.startsWith('</BRANCH>') || line.startsWith('</ENDING>')) {
+        // Just delimiters, logic is handled by the content preceding it
+        i++;
+        continue;
+    }
+
+    // 7. Detect State (Timestamp/System message)
+    if (line.startsWith('[') && line.endsWith(']')) {
+      currentLines.push({ 
+        type: 'state', 
+        content: line.slice(1, -1) 
+      });
+      i++;
+      continue;
+    }
+
+    // 8. Dialogue
+    // "Speaker: Content" or just "Content"
+    const colonIndex = line.indexOf(':');
+    // Basic check: is the colon near the start? (Avoid colons in normal text being mistaken for speaker)
+    // Chinese colon '：' support
+    const zhColonIndex = line.indexOf('：');
+    
+    let speaker = lastSpeaker;
+    let content = line;
+
+    const splitIndex = (zhColonIndex > -1 && (colonIndex === -1 || zhColonIndex < colonIndex)) ? zhColonIndex : colonIndex;
+
+    if (splitIndex > -1 && splitIndex < 10) { // Arbitrary limit: speaker name usually short
+      speaker = line.substring(0, splitIndex).trim();
+      content = line.substring(splitIndex + 1).trim();
+      lastSpeaker = speaker; // Update context
+    }
+
+    currentLines.push({
+      type: 'dialogue',
+      speaker,
+      content
+    });
+    i++;
+  }
+  
+  saveCurrentBlock();
+  return data;
+};
+
+/**
+ * AVATAR UTILS
+ */
+const getAvatarColor = (name: string) => {
+  const colors = [
+    'bg-blue-400', 'bg-red-400', 'bg-yellow-400', 'bg-purple-400', 
+    'bg-pink-400', 'bg-indigo-400', 'bg-teal-400', 'bg-orange-400'
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return colors[Math.abs(hash) % colors.length];
+};
+
+const Avatar = ({ speaker }: { speaker: string }) => {
+  if (speaker === '我') {
+    // Placeholder for user avatar
+    return (
+      <div className="w-10 h-10 rounded-md bg-gray-200 overflow-hidden flex-shrink-0">
+         <img src="/api/placeholder/100/100" alt="Me" className="w-full h-full object-cover" />
+      </div>
+    );
+  } else if (speaker === '旁白') {
+    return (
+      <div className="w-10 h-10 rounded-md bg-black flex items-center justify-center flex-shrink-0">
+        <span className="text-white font-bold text-lg">?</span>
+      </div>
+    );
+  } else {
+    return (
+      <div className={`w-10 h-10 rounded-md ${getAvatarColor(speaker)} flex items-center justify-center text-white font-bold text-sm flex-shrink-0`}>
+        {speaker.charAt(0)}
+      </div>
+    );
+  }
+};
+
+/**
+ * MAIN COMPONENT
+ */
+export default function WeChatFictionReader() {
+  // Game Data State
+  const [storyData, setStoryData] = useState<StoryData | null>(null);
+  const [messageHistory, setMessageHistory] = useState<Message[]>([]);
+  
+  // Execution State
+  const [currentBlock, setCurrentBlock] = useState<Line[]>([]);
+  const [lineIndex, setLineIndex] = useState(0);
+  const [waitingForChoice, setWaitingForChoice] = useState<ChoiceOption[] | null>(null);
+  
+  // UI State
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingSpeaker, setTypingSpeaker] = useState('');
+  const [endingInfo, setEndingInfo] = useState<{title: string, eval: string} | null>(null);
+  const [showMenu, setShowMenu] = useState(false);
+  
+  // Input Handling
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const autoPlayTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref to hold the latest version of processNextLine to avoid stale closures in timeouts
+  const processNextLineRef = useRef<() => void>(() => {});
+
+  // Constants
+  const ME = '我';
+
+  // --- Scroll to bottom ---
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messageHistory, isTyping, waitingForChoice]);
+
+  // --- Initialize ---
+  useEffect(() => {
+    // Initial system message
+    setMessageHistory([{
+      id: 0,
+      speaker: '旁白',
+      content: '请上传记录。',
+      isMe: false,
+      type: 'text'
+    }]);
+  }, []);
+
+  // --- Core Game Loop ---
+  
+  // Helper: Clear any existing auto-play timer
+  const clearAutoPlay = () => {
+    if (autoPlayTimerRef.current) {
+      clearTimeout(autoPlayTimerRef.current);
+      autoPlayTimerRef.current = null;
+    }
+  };
+
+  const processNextLine = () => {
+    if (!storyData) return;
+    if (lineIndex >= currentBlock.length) return; // End of block
+    if (isTyping || waitingForChoice || endingInfo) return; // Busy
+
+    const line = currentBlock[lineIndex];
+
+    // Handle Logic Types immediately
+    if (line.type === 'goto') {
+      if (line.targetScene && storyData.scenes[line.targetScene]) {
+        setCurrentBlock(storyData.scenes[line.targetScene].lines);
+        setLineIndex(0);
+        // Recursively call to start the new scene immediately
+        // Use ref to avoid stale closures
+        setTimeout(() => processNextLineRef.current(), 0); 
+      }
+      return;
+    }
+
+    if (line.type === 'choice') {
+      setWaitingForChoice(line.options || []);
+      setLineIndex(prev => prev + 1);
+      return;
+    }
+
+    if (line.type === 'ending') {
+      setEndingInfo({
+        title: line.endingTitle || '结局',
+        eval: line.endingEval || '暂无评价'
+      });
+      return;
+    }
+
+    // Handle Display Types (Dialogue, State)
+    if (line.type === 'dialogue') {
+      // 1. Set Typing State
+      setIsTyping(true);
+      setTypingSpeaker(line.speaker || '旁白');
+
+      // 2. Wait 1s
+      setTimeout(() => {
+        setIsTyping(false);
+        
+        // 3. Add Message
+        setMessageHistory(prev => [
+          ...prev,
+          {
+            id: Date.now(),
+            speaker: line.speaker || '旁白',
+            content: line.content || '...',
+            isMe: (line.speaker === ME),
+            type: 'text'
+          }
+        ]);
+
+        // 4. Advance Index
+        setLineIndex(prev => prev + 1);
+
+        // 5. Start Auto-Play Timer (3s)
+        clearAutoPlay();
+        autoPlayTimerRef.current = setTimeout(() => {
+          triggerAutoAdvance();
+        }, 3000);
+
+      }, 1000);
+    } 
+    else if (line.type === 'state') {
+        // State logic
+        setMessageHistory(prev => [
+          ...prev,
+          {
+            id: Date.now(),
+            speaker: 'System',
+            content: line.content || '',
+            isMe: false,
+            type: 'state'
+          }
+        ]);
+        setLineIndex(prev => prev + 1);
+        // Next line immediately
+        // FIX: Use ref.current() to ensure we call the updated function with the new lineIndex
+        setTimeout(() => processNextLineRef.current(), 50);
+    }
+  };
+
+  // Sync the ref with the latest function on every render
+  useEffect(() => {
+    processNextLineRef.current = processNextLine;
+  });
+
+  const triggerAutoAdvance = () => {
+     // Check if we can advance (not waiting for choice, not typing)
+     processNextLineRef.current();
+  };
+
+  // --- Interaction Handlers ---
+
+  const handleScreenClick = () => {
+    // Reset auto-play timer on manual interaction
+    clearAutoPlay();
+    
+    // If waiting for file
+    if (!storyData) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    // Attempt to process next line
+    processNextLine();
+  };
+
+  const handleChoice = (option: ChoiceOption) => {
+    if (!storyData) return;
+
+    // 1. Add "Me" saying the option text
+    setMessageHistory(prev => [
+      ...prev,
+      {
+        id: Date.now(),
+        speaker: ME,
+        content: option.text,
+        isMe: true,
+        type: 'text'
+      }
+    ]);
+
+    // 2. Clear choice wait state
+    setWaitingForChoice(null);
+
+    // 3. Jump to Branch
+    const branchBlock = storyData.branches[option.id];
+    if (branchBlock) {
+      setCurrentBlock(branchBlock.lines);
+      setLineIndex(0);
+      // Kickstart the branch logic after a short delay for visual pacing
+      setTimeout(() => triggerAutoAdvance(), 500);
+    } else {
+      console.error(`Branch ${option.id} not found!`);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const parsed = parseScript(text);
+      if (parsed.startSceneId && parsed.scenes[parsed.startSceneId]) {
+        setStoryData(parsed);
+        setCurrentBlock(parsed.scenes[parsed.startSceneId].lines);
+        setLineIndex(0);
+        setMessageHistory([]); // Clear "Please upload"
+        setWaitingForChoice(null);
+        setEndingInfo(null);
+        
+        // Start game
+        setTimeout(() => triggerAutoAdvance(), 500);
+      } else {
+        alert("无法解析文件或找不到起始场景 (id='START' or first scene).");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const restartGame = () => {
+    if (storyData && storyData.startSceneId) {
+      setCurrentBlock(storyData.scenes[storyData.startSceneId].lines);
+      setLineIndex(0);
+      setMessageHistory([]);
+      setWaitingForChoice(null);
+      setEndingInfo(null);
+      clearAutoPlay();
+      setShowMenu(false);
+      setTimeout(() => triggerAutoAdvance(), 500);
+    }
+  };
+
+  const resetAll = () => {
+    setStoryData(null);
+    setMessageHistory([{
+      id: 0,
+      speaker: '旁白',
+      content: '请上传记录。',
+      isMe: false,
+      type: 'text'
+    }]);
+    setWaitingForChoice(null);
+    setEndingInfo(null);
+    clearAutoPlay();
+    setShowMenu(false);
+  };
+
+  return (
+    <div className="flex justify-center items-center w-full h-screen bg-gray-900 font-sans">
+      {/* Mobile Device Container */}
+      <div className="w-full h-full max-w-md bg-[#F5F5F5] flex flex-col relative overflow-hidden shadow-2xl">
+        
+        {/* Header */}
+        <header className="bg-[#EDEDED] h-12 flex items-center justify-between px-4 border-b border-gray-300 z-20 shrink-0">
+          <div className="flex items-center space-x-1">
+             {/* Fake Back Button */}
+             <svg width="12" height="20" viewBox="0 0 12 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2L2 10L10 18" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+             </svg>
+             <span className="font-medium text-lg ml-2">互动小说阅读器</span>
+          </div>
+          <button onClick={() => setShowMenu(!showMenu)} className="p-2 rounded-md hover:bg-gray-200">
+            <MoreHorizontal className="text-black" />
+          </button>
+        </header>
+
+        {/* Dropdown Menu */}
+        {showMenu && (
+          <div className="absolute top-12 right-2 bg-[#4C4C4C] rounded-lg shadow-xl z-50 py-2 w-40 text-white animate-in fade-in slide-in-from-top-2">
+            <button onClick={restartGame} className="flex items-center px-4 py-3 w-full hover:bg-[#5C5C5C] border-b border-[#5C5C5C]">
+              <RotateCcw size={18} className="mr-3" />
+              重新开始
+            </button>
+            <button onClick={() => { fileInputRef.current?.click(); setShowMenu(false); }} className="flex items-center px-4 py-3 w-full hover:bg-[#5C5C5C]">
+              <Upload size={18} className="mr-3" />
+              上传新纪录
+            </button>
+          </div>
+        )}
+
+        {/* Chat Area */}
+        <div 
+          className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar" 
+          onClick={handleScreenClick}
+        >
+          {messageHistory.map((msg) => {
+            if (msg.type === 'state') {
+              return (
+                <div key={msg.id} className="flex justify-center py-2">
+                  <span className="bg-[#DADADA] text-white text-xs px-2 py-1 rounded-sm">
+                    {msg.content}
+                  </span>
+                </div>
+              );
+            }
+
+            return (
+              <div key={msg.id} className={`flex w-full mb-4 ${msg.isMe ? 'justify-end' : 'justify-start'}`}>
+                {!msg.isMe && <Avatar speaker={msg.speaker} />}
+                
+                <div className={`mx-2 max-w-[70%] relative`}>
+                  {!msg.isMe && msg.speaker !== '旁白' && (
+                    <p className="text-gray-500 text-xs mb-1 ml-1">{msg.speaker}</p>
+                  )}
+                  
+                  <div className={`px-3 py-2 rounded-lg text-black text-[15px] leading-relaxed break-words relative 
+                    ${msg.isMe ? 'bg-[#95ec69]' : 'bg-white'} 
+                    ${msg.isMe ? 'rounded-tr-none' : 'rounded-tl-none'}
+                    shadow-sm border border-gray-200/50`}>
+                    
+                    {/* Bubble Arrow */}
+                    <div className={`absolute top-[6px] w-2 h-2 transform rotate-45 
+                      ${msg.isMe ? '-right-1 bg-[#95ec69]' : '-left-1 bg-white'}
+                    `}></div>
+                    
+                    {msg.content}
+                  </div>
+                </div>
+
+                {msg.isMe && <Avatar speaker={msg.speaker} />}
+              </div>
+            );
+          })}
+
+          {/* Typing Indicator */}
+          {isTyping && (
+             <div className={`flex w-full mb-4 justify-start`}>
+                <Avatar speaker={typingSpeaker} />
+                <div className="mx-2 bg-white px-4 py-3 rounded-lg rounded-tl-none shadow-sm flex items-center space-x-1 h-[40px]">
+                   <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                   <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                   <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                </div>
+             </div>
+          )}
+
+          <div ref={chatEndRef} className="h-4" />
+        </div>
+
+        {/* Input Area */}
+        <div className="bg-[#F7F7F7] border-t border-[#DCDCDC] p-2 min-h-[50px] shrink-0 flex items-center justify-center safe-area-pb">
+          {waitingForChoice ? (
+            <div className="w-full flex flex-col space-y-2 p-1">
+              {waitingForChoice.map((option) => (
+                <button
+                  key={option.id}
+                  onClick={(e) => { e.stopPropagation(); handleChoice(option); }}
+                  className="w-full bg-white active:bg-gray-100 text-black py-3 rounded-md border border-gray-200 text-sm font-medium shadow-sm transition-colors"
+                >
+                  {option.text}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div 
+              className="w-full bg-white h-10 rounded-md border border-[#DCDCDC] flex items-center justify-center text-gray-400 text-sm active:bg-gray-50"
+              onClick={handleScreenClick}
+            >
+              {!storyData ? "点击此处上传剧情文件" : "点击屏幕继续..."}
+            </div>
+          )}
+        </div>
+
+        {/* Hidden File Input */}
+        <input
+          type="file"
+          accept=".csv,.txt,.xml"
+          ref={fileInputRef}
+          className="hidden"
+          onChange={handleFileUpload}
+        />
+
+        {/* Ending Modal */}
+        {endingInfo && (
+          <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
+            <div className="bg-white w-full rounded-xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+              <div className="bg-[#EDEDED] px-6 py-4 border-b border-gray-200">
+                <h2 className="text-xl font-bold text-center text-gray-800">{endingInfo.title}</h2>
+              </div>
+              <div className="p-8 text-center">
+                <div className="text-6xl mb-4">🏁</div>
+                <p className="text-gray-600 text-lg leading-relaxed">{endingInfo.eval}</p>
+              </div>
+              <div className="bg-[#F7F7F7] p-4 flex flex-col gap-3">
+                <button 
+                  onClick={restartGame}
+                  className="w-full bg-[#07C160] hover:bg-[#06ad56] text-white font-medium py-3 rounded-lg transition-colors"
+                >
+                  重新游玩
+                </button>
+                <button 
+                  onClick={() => { resetAll(); fileInputRef.current?.click(); }}
+                  className="w-full bg-white hover:bg-gray-50 text-gray-800 font-medium py-3 rounded-lg border border-gray-300 transition-colors"
+                >
+                  上传新纪录
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
