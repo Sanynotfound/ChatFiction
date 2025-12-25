@@ -1,0 +1,40 @@
+<NOVEL title="雨夜抉择"> 
+<SCENE id="START"> 
+旁白: 这是一个雨夜。 
+[半小时前] 
+神秘人: 你终于来了。 
+我: 你是谁？ 
+神秘人: 这不重要。重要的是你手里的东西。 
+<CHOICE id="抉择"> 
+A id="C1_A">把东西给他。</A> 
+B id="C1_B">转身逃跑。</B> 
+</CHOICE>
+
+<BRANCH from="C1_A"> 
+我: 给你吧，我不想惹麻烦。 
+神秘人: 算你识相。
+ <GOTO scene="END_GOOD" /> 
+</BRANCH>
+<BRANCH from="C1_B"> 
+
+我: 休想！ 神秘人: 敬酒不吃吃罚酒！ 
+[一声枪响] 
+<GOTO scene="END_BAD" />
+ </BRANCH>
+
+<SCENE id="END_GOOD"> 
+[第二天] 旁白: 你平安度过了一劫。 
+【结局1】[平凡的一天] —— 平平淡淡才是真 
+</ENDING>
+
+<SCENE id="END_BAD"> 
+旁白: 你倒在了血泊中。 
+【结局2】[莽撞的代价] —— 下次别这么冲动 
+</ENDING> 
+</NOVEL>
+
+<NOVEL title="办公室风云"> <SCENE id="START"> 老板: 这个方案明天早上之前必须要。 我: 可是老板，现在已经晚上十点了。 老板: 那是你的问题，不是我的问题。 <CHOICE id="WORK_CHOICE"> A id="W_ACCEPT">好的，我通宵做。</A> B id="W_REFUSE">抱歉，我身体不舒服。</B> </CHOICE>
+<BRANCH from="W_ACCEPT"> 我: 好的，老板，我尽量。 [凌晨三点] 旁白: 你看着窗外的星星，感到一阵眩晕。 <GOTO scene="END_TIRED" /> </BRANCH>
+<BRANCH from="W_REFUSE"> 我: 抱歉，我真的需要休息。 老板: 你想清楚后果了吗？ 我: 我想清楚了，健康更重要。 <GOTO scene="END_FIRED" /> </BRANCH>
+<SCENE id="END_TIRED"> 旁白: 方案通过了，但你也在医院躺了一周。 【结局A】[社畜的悲歌] —— 身体是革命的本钱 </ENDING>
+<SCENE id="END_FIRED"> 旁白: 你失去了工作，但找回了生活的节奏。 【结局B】[自由的灵魂] —— 塞翁失马焉知非福 </ENDING> </NOVEL>
