@@ -36,13 +36,6 @@
         .animate-in {
             animation: fadeIn 0.2s ease-out forwards;
         }
-        @keyframes slideInFromRight {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-        }
-        .slide-in-right {
-            animation: slideInFromRight 0.3s ease-out forwards;
-        }
         @keyframes zoomIn {
             from { transform: scale(0.95); opacity: 0; }
             to { transform: scale(1); opacity: 1; }
@@ -505,7 +498,7 @@
                         <div className="w-full h-full max-w-md bg-white flex flex-col relative overflow-hidden shadow-2xl">
                             {/* 微信头部 */}
                             <header className="bg-[#EDEDED] h-[52px] flex items-center justify-between px-4 sticky top-0 z-10">
-                                <span className="font-medium text-[17px] text-[#181818]">微信</span>
+                                <span className="font-medium text-[17px] text-[#181818]">微不信</span>
                                 <div className="flex space-x-4 text-[#181818]">
                                     <SearchIcon />
                                     <PlusIcon />
@@ -528,7 +521,7 @@
                                             <span className="text-[10px] text-gray-400">刚刚</span>
                                         </div>
                                         <p className="text-[14px] text-gray-400 truncate">
-                                            [点击此处上传本地剧本文件]
+                                            [点击此处上传本地文件]
                                         </p>
                                     </div>
                                 </div>
@@ -564,26 +557,6 @@
                                     </div>
                                 ))}
                             </div>
-
-                            {/* 底部导航栏 (装饰用) */}
-                            <footer className="h-[56px] bg-[#F7F7F7] border-t border-gray-200 flex items-center justify-around pb-safe">
-                                <div className="flex flex-col items-center justify-center text-[#07C160]">
-                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-                                    <span className="text-[10px] mt-0.5">微信</span>
-                                </div>
-                                <div className="flex flex-col items-center justify-center text-gray-400">
-                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                                    <span className="text-[10px] mt-0.5">通讯录</span>
-                                </div>
-                                <div className="flex flex-col items-center justify-center text-gray-400">
-                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-                                    <span className="text-[10px] mt-0.5">发现</span>
-                                </div>
-                                <div className="flex flex-col items-center justify-center text-gray-400">
-                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                                    <span className="text-[10px] mt-0.5">我</span>
-                                </div>
-                            </footer>
                         </div>
                     </div>
                 );
@@ -592,7 +565,8 @@
             // 2. 阅读器视图
             return (
                 <div className="flex justify-center items-center w-full h-screen bg-gray-900 font-sans">
-                    <div className="w-full h-full max-w-md bg-[#F5F5F5] flex flex-col relative overflow-hidden shadow-2xl animate-in slide-in-right">
+                    {/* 已移除 animate-in slide-in-right，确保无闪屏 */}
+                    <div className="w-full h-full max-w-md bg-[#F5F5F5] flex flex-col relative overflow-hidden shadow-2xl">
                         
                         {/* 顶部栏 */}
                         <header className="bg-[#EDEDED] h-[48px] flex items-center justify-between px-3 border-b border-gray-300 z-20 shrink-0 select-none">
